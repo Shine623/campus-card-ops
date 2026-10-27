@@ -1,0 +1,32 @@
+# 日志
+*.log
+logs/
+/var/log/cardcheck/
+
+# 报告与导出
+report_*.txt
+cutover_*.log
+*.csv
+!samples/*.csv
+
+# 备份
+backup/
+*.sql.gz
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 配置（含密码）
+config_local.*
+*.env
+
+# IDE
+.idea/
+.vscode/
+
+# 系统
+.DS_Store
+Thumbs.db
