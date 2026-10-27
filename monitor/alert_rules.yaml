@@ -1,0 +1,145 @@
+# ============================================================
+# Zabbix 告警规则
+#
+# 踩坑：一次网络抖动触发 200+ 告警，手机被短信轰炸。
+# 解决：加告警聚合（相同类型 5 分钟一次）和依赖关系。
+# ============================================================
+
+templates:
+  - name: CardSystem
+    macros:
+      - macro: '{$CPU_WARN}'
+        value: 80
+      - macro: '{$CPU_ERR}'
+        value: 95
+      - macro: '{$MEM_WARN}'
+        value: 85
+      - macro: '{$DISK_WARN}'
+        value: 85
+      - macro: '{$DISK_ERR}'
+        value: 95
+      - macro: '{$SLAVE_DELAY_WARN}'
+        value: 10
+      - macro: '{$SLAVE_DELAY_ERR}'
+        value: 60
+      - macro: '{$TX_FAIL_RATE}'
+        value: 1
+
+    items:
+      - name: CPU utilization
+        key: system.cpu.util
+        trigger:
+          - severity: Warning
+            expression: last(/system.cpu.util) > {$CPU_WARN}
+            name: 'CPU 使用率超过 {$CPU_WARN}%'
+          - severity: High
+            expression: last(/system.cpu.util) > {$CPU_ERR}
+            name: 'CPU 使用率超过 {$CPU_ERR}%'
+
+      - name: Memory utilization
+        key: vm.memory.utilization
+        trigger:
+          - severity: Warning
+            expression: last(/vm.memory.utilization) > {$MEM_WARN}
+            name: '内存使用率超过 {$MEM_WARN}%'
+
+      - name: Disk usage /var
+        key: vfs.fs.size[/var,pused]
+        trigger:
+          - severity: Warning
+            expression: last(/vfs.fs.size[/var,pused]) > {$DISK_WARN}
+            name: '/var 磁盘使用率超过 {$DISK_WARN}%'
+          - severity: High
+            expression: last(/vfs.fs.size[/var,pused]) > {$DISK_ERR}
+            name: '/var 磁盘使用率超过 {$DISK_ERR}%'
+
+      - name: MySQL slave delay
+        key: mysql.slave.delay
+        trigger:
+          - severity: Warning
+            expression: last(/mysql.slave.delay) > {$SLAVE_DELAY_WARN}
+            name: '主从延迟超过 {$SLAVE_DELAY_WARN} 秒'
+          - severity: High
+            expression: last(/mysql.slave.delay) > {$SLAVE_DELAY_ERR}
+            name: '主从延迟超过 {$SLAVE_DELAY_ERR} 秒'
+
+      - name: MySQL slave running
+        key: mysql.slave.running
+        trigger:
+          - severity: Disaster
+            expression: last(/mysql.slave.running) = 0
+            name: '主从同步中断'
+
+      - name: Tomcat process
+        key: proc.num[tomcat]
+        trigger:
+          - severity: Disaster
+            expression: last(/proc.num[tomcat]) = 0
+            name: 'Tomcat 进程不存在'
+
+      - name: Transaction fail rate
+        key: card.tx.failrate
+        trigger:
+          - severity: High
+            expression: last(/card.tx.failrate) > {$TX_FAIL_RATE}
+            name: '交易失败率超过 {$TX_FAIL_RATE}%'
+
+      - name: Pending recharge
+        key: card.recharge.pending
+        trigger:
+          - severity: High
+            expression: last(/card.recharge.pending) > 0
+            name: '有充值处于 PENDING 状态超过 10 分钟'
+
+# ============================================================
+# 告警聚合与抑制
+# ============================================================
+
+actions:
+  - name: 聚合告警
+    condition:
+      event_type: trigger
+    operations:
+      # 相同主机 + 相同触发器，5 分钟内只发一次
+      - type: message
+        aggregate:
+          enabled: true
+          interval: 300
+          group_by:
+            - host
+            - trigger
+        media: email
+        to: ops@example.edu
+
+  - name: 严重告警立即通知
+    condition:
+      event_type: trigger
+      severity: [Disaster, High]
+    operations:
+      - type: message
+        media: sms
+        to: 13800138000
+        # 但受依赖关系抑制
+        suppress_by_dependency: true
+
+# ============================================================
+# 依赖关系（抑制规则）
+# ============================================================
+
+dependencies:
+  # 网络故障时，抑制所有应用层告警（肯定是网络引起的）
+  - trigger: 'Network is unreachable'
+    suppresses:
+      - 'Tomcat 进程不存在'
+      - '交易失败率超过 1%'
+
+  # 主从同步中断时，抑制延迟告警（延迟是结果不是原因）
+  - trigger: '主从同步中断'
+    suppresses:
+      - '主从延迟超过 10 秒'
+      - '主从延迟超过 60 秒'
+
+  # 磁盘满时，抑制其他告警
+  - trigger: '/var 磁盘使用率超过 95%'
+    suppresses:
+      - 'Tomcat 进程不存在'
